@@ -1,10 +1,7 @@
 import customtkinter as ctk
-import threading
-import time
-import ctypes
-import ctypes.wintypes as wintypes
+import threading, time, os
+import ctypes, ctypes.wintypes as wintypes
 from pynput import mouse
-import os
 
 # ─── WinAPI Setup ───────────────────────────────────────────────────────────────
 SendInput        = ctypes.windll.user32.SendInput
@@ -13,19 +10,19 @@ ULONG_PTR        = wintypes.WPARAM
 
 class MOUSEINPUT(ctypes.Structure):
     _fields_ = [
-        ("dx",         wintypes.LONG),
-        ("dy",         wintypes.LONG),
-        ("mouseData",  wintypes.DWORD),
-        ("dwFlags",    wintypes.DWORD),
-        ("time",       wintypes.DWORD),
-        ("dwExtraInfo",ULONG_PTR),
+        ("dx", wintypes.LONG),
+        ("dy", wintypes.LONG),
+        ("mouseData", wintypes.DWORD),
+        ("dwFlags", wintypes.DWORD),
+        ("time", wintypes.DWORD),
+        ("dwExtraInfo", ULONG_PTR),
     ]
 
 class INPUT(ctypes.Structure):
     class _I(ctypes.Union):
         _fields_ = [("mi", MOUSEINPUT)]
     _anonymous_ = ("i",)
-    _fields_   = [
+    _fields_ = [
         ("type", wintypes.DWORD),
         ("i",    _I),
     ]
@@ -41,7 +38,7 @@ def send_mouse_move(dx, dy):
     SendInput(1, ctypes.byref(inp), ctypes.sizeof(inp))
 
 
-# ─── Preset Loader ──────────────────────────────────────────────────────────────
+# ─── Preset‑Loader ──────────────────────────────────────────────────────────────
 def load_presets(filename="operators.txt"):
     presets = {}
     if not os.path.isfile(filename):
@@ -63,23 +60,26 @@ def load_presets(filename="operators.txt"):
                 print(f"[Warnung] Konnte Wert nicht als Float parsen: {line}")
     return presets
 
+
 # ─── Globale Zustände ───────────────────────────────────────────────────────────
 running       = True
 x_recoil      = 0.0
 y_recoil      = 3.0
 delay_ms      = 15.0
+
 left_pressed  = False
 right_pressed = False
-mode_toggle   = False
-aim_enabled   = False
+
+mode_toggle   = False  # False = Hold‑Mode, True = Toggle‑Mode
+aim_enabled   = False  # Nur im Toggle‑Mode genutzt
+
 acc_x = 0.0
 acc_y = 0.0
 
-# lade Presets aus Datei
-operators = load_presets("operators.txt")
+operators = load_presets()
 if not operators:
-    # fallback, damit GUI nicht abstürzt
     operators = {"Default": (0.0, 3.0)}
+
 
 # ─── Recoil‑Loop ────────────────────────────────────────────────────────────────
 def recoil_loop():
@@ -99,36 +99,42 @@ def recoil_loop():
                 send_mouse_move(dx, dy)
                 acc_x -= dx
                 acc_y -= dy
-            time.sleep(delay_ms/1000)
+            time.sleep(delay_ms / 1000)
         else:
             time.sleep(0.01)
+
 
 # ─── Maus‑Event‑Handler ─────────────────────────────────────────────────────────
 def on_click(x, y, button, pressed):
     global left_pressed, right_pressed, aim_enabled
     if button == mouse.Button.left:
         left_pressed = pressed
+
     elif button == mouse.Button.right:
-        if mode_toggle and pressed:
+        # im Toggle‑Mode: nur beim Loslassen toggeln
+        if mode_toggle and not pressed:
             aim_enabled = not aim_enabled
             print(f"[Recoil] Aim‑Mode {'ON' if aim_enabled else 'OFF'}")
         right_pressed = pressed
+
 
 # ─── GUI ───────────────────────────────────────────────────────────────────────
 def start_gui():
     global x_recoil, y_recoil, delay_ms, mode_toggle, aim_enabled
 
+    ctk.set_appearance_mode("System")
     app = ctk.CTk()
     app.title("R6 Recoil Controller")
     app.geometry("360x550")
 
-    # Eingabefelder
-    ctk.CTkLabel(app, text="X Recoil (Float):").pack(pady=(10,0))
-    x_entry = ctk.CTkEntry(app); x_entry.insert(0, str(x_recoil)); x_entry.pack()
-    ctk.CTkLabel(app, text="Y Recoil (Float):").pack(pady=(10,0))
-    y_entry = ctk.CTkEntry(app); y_entry.insert(0, str(y_recoil)); y_entry.pack()
-    ctk.CTkLabel(app, text="Delay (ms):").pack(pady=(10,0))
-    delay_entry = ctk.CTkEntry(app); delay_entry.insert(0, str(delay_ms)); delay_entry.pack()
+    # Felder für X, Y, Delay
+    for label_text, var in [("X Recoil (Float):", "x"), ("Y Recoil (Float):", "y"), ("Delay (ms):", "d")]:
+        ctk.CTkLabel(app, text=label_text).pack(pady=(10,0))
+        entry = ctk.CTkEntry(app)
+        if var == "x": entry.insert(0, str(x_recoil)); x_entry = entry
+        if var == "y": entry.insert(0, str(y_recoil)); y_entry = entry
+        if var == "d": entry.insert(0, str(delay_ms)); delay_entry = entry
+        entry.pack()
 
     def apply_values():
         global x_recoil, y_recoil, delay_ms, acc_x, acc_y
@@ -137,41 +143,44 @@ def start_gui():
             y_recoil = float(y_entry.get().replace(",", "."))
             delay_ms = float(delay_entry.get().replace(",", "."))
             acc_x = acc_y = 0.0
-            print(f"[Recoil] Werte gesetzt: X={x_recoil}, Y={y_recoil}, Delay={delay_ms}ms")
+            print(f"[Recoil] Werte: X={x_recoil}, Y={y_recoil}, Delay={delay_ms}ms")
         except ValueError:
             pass
 
     ctk.CTkButton(app, text="Übernehmen", command=apply_values).pack(pady=10)
 
-    # Switch Hold vs. Toggle
-    def switch_callback(state: bool):
+    # Switch Hold vs Toggle
+    switch = ctk.CTkSwitch(app, text="Toggle‑Mode aktivieren")
+    switch.pack(pady=(10, 5))
+    def on_switch():
         global mode_toggle, aim_enabled
-        mode_toggle = state
-        if not mode_toggle:
-            aim_enabled = False
-            print("[Recoil] Switched to HOLD mode")
-        else:
-            print("[Recoil] Switched to TOGGLE mode")
-    ctk.CTkSwitch(app, text="Toggle‑Mode aktivieren", command=switch_callback).pack(pady=(10,5))
+        mode_toggle = switch.get()
+        aim_enabled = False
+        state = "TOGGLE" if mode_toggle else "HOLD"
+        print(f"[Recoil] Modus: {state}")
+    switch.configure(command=on_switch)
 
     # Scrollframe für Operator‑Buttons
     frame = ctk.CTkScrollableFrame(app, height=300)
     frame.pack(fill="both", expand=True, padx=10, pady=(0,10))
 
-    def select_operator(op):
+    def select_operator(name):
         global x_recoil, y_recoil, acc_x, acc_y
-        xr, yr = operators[op]
+        xr, yr = operators[name]
         x_recoil, y_recoil = xr, yr
         acc_x = acc_y = 0.0
         x_entry.delete(0, "end"); x_entry.insert(0, str(xr))
         y_entry.delete(0, "end"); y_entry.insert(0, str(yr))
-        print(f"[Recoil] Operator {op} geladen: X={xr}, Y={yr}")
+        print(f"[Recoil] {name}: X={xr}, Y={yr}")
 
-    for op in operators:
-        ctk.CTkButton(frame, text=op, command=lambda o=op: select_operator(o)).pack(fill="x", pady=2)
+    for name in operators:
+        btn = ctk.CTkButton(frame, text=name, command=lambda n=name: select_operator(n))
+        btn.pack(fill="x", pady=2)
 
     app.mainloop()
 
+
+# ─── Main ──────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     threading.Thread(target=recoil_loop, daemon=True).start()
     mouse.Listener(on_click=on_click).start()
